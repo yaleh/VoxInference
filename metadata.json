@@ -1,0 +1,7 @@
+{
+  "name": "The Pulse - Phase 1",
+  "description": "A high-performance, mobile-first real-time audio interface with low-latency semantic streaming.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
