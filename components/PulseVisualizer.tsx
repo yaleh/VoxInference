@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import * as d3 from 'd3';
+import { select } from 'd3';
 
 interface PulseVisualizerProps {
   volume: number; // 0.0 - 1.0
@@ -8,90 +8,83 @@ interface PulseVisualizerProps {
 
 const PulseVisualizer: React.FC<PulseVisualizerProps> = ({ volume, isActive }) => {
   const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!svgRef.current) return;
+    if (!svgRef.current || !containerRef.current) return;
 
-    const svg = d3.select(svgRef.current);
-    const width = svgRef.current.clientWidth;
-    const height = svgRef.current.clientHeight;
-    const centerX = width / 2;
-    const centerY = height / 2;
-    
+    const svg = select(svgRef.current);
+    const width = containerRef.current.clientWidth;
+    const height = containerRef.current.clientHeight;
+
+    // Configuration
+    const barCount = 30; // Number of bars across the header
+    const barWidth = width / barCount;
+    const barGap = 2;
+
     // Clear previous
     svg.selectAll('*').remove();
 
-    const g = svg.append('g').attr('transform', `translate(${centerX},${centerY})`);
+    // Create bars
+    const bars = svg.selectAll('rect')
+      .data(new Array(barCount).fill(0))
+      .enter()
+      .append('rect')
+      .attr('x', (d, i) => i * barWidth)
+      .attr('y', height) // Start at bottom
+      .attr('width', barWidth - barGap)
+      .attr('height', 0)
+      .attr('fill', isActive ? '#06b6d4' : '#374151') // Cyan if active, Gray if idle
+      .attr('opacity', 0.6);
 
-    // Base circle (The Core)
-    g.append('circle')
-      .attr('r', 40)
-      .attr('fill', '#111')
-      .attr('stroke', isActive ? '#22d3ee' : '#4b5563')
-      .attr('stroke-width', 2);
+  }, [isActive]); // Re-init on resize/active toggle
 
-    // Dynamic Pulsing Ring
-    const pulseRing = g.append('circle')
-      .attr('r', 40)
-      .attr('fill', 'none')
-      .attr('stroke', isActive ? '#06b6d4' : 'transparent')
-      .attr('stroke-width', 2)
-      .attr('opacity', 0.5);
-
-    // Data-driven update function for animation
-    // Since React handles re-renders, we use a ref to store the D3 selection for updates
-    // inside a separate useEffect or via the main update loop. 
-    // However, simpler to just re-render small parts or use CSS transforms for the heavy lifting.
-    
-    // Let's use CSS transforms via style prop for high perf, but initialize D3 for structure.
-    
-  }, [isActive]); // Re-init on active toggle
-
-  // Direct DOM manipulation for high-frequency volume updates
+  // Animation Loop
   useEffect(() => {
-    if (!svgRef.current) return;
-    const svg = d3.select(svgRef.current);
-    const pulseRing = svg.select('circle:nth-child(2)'); // The second circle
-    const core = svg.select('circle:nth-child(1)');
-
-    // Non-linear scaling for better visual effect
-    const scale = 1 + (volume * 4); 
+    if (!svgRef.current || !containerRef.current) return;
+    const svg = select(svgRef.current);
+    const width = containerRef.current.clientWidth;
+    const height = containerRef.current.clientHeight;
     
-    if (isActive) {
-        pulseRing
-            .transition()
-            .duration(50)
-            .attr('r', 40 * scale)
-            .attr('stroke-opacity', 1 - volume) // Fade out as it expands
-            .attr('stroke', `rgb(${34 + volume * 100}, ${211 - volume * 50}, ${238})`); // Cyan drift
+    // Animate bars based on single volume value (simulated frequency distribution)
+    svg.selectAll('rect')
+        .transition()
+        .duration(100)
+        .ease((t) => t) // Linear ease for snappy feel
+        .attr('y', (d, i) => {
+            // Create a symmetrical wave pattern centered in the middle
+            // Using a simple sine wave modulated by volume
+            if (!isActive) return height - 2; // Flat line if inactive
+
+            const center = 15; // approximate center index (barCount/2)
+            const dist = Math.abs(i - center);
+            const dropoff = Math.max(0, 1 - (dist / 15)); // 1.0 at center, 0.0 at edges
             
-        core
-            .transition()
-            .duration(50)
-            .attr('fill', `rgba(6, 182, 212, ${volume * 0.8})`); // Core lights up
-    } else {
-        pulseRing.transition().duration(500).attr('r', 40).attr('stroke-opacity', 0);
-        core.transition().duration(500).attr('fill', '#111');
-    }
+            // Random jitter + smooth wave
+            const jitter = Math.random() * 0.2;
+            const barHeight = Math.min(height, (volume * height * dropoff) + (volume * height * jitter));
+            
+            return height - Math.max(2, barHeight); 
+        })
+        .attr('height', (d, i) => {
+             if (!isActive) return 2;
+             
+             const center = 15;
+             const dist = Math.abs(i - center);
+             const dropoff = Math.max(0, 1 - (dist / 15));
+             
+             const jitter = Math.random() * 0.2;
+             const barHeight = Math.min(height, (volume * height * dropoff) + (volume * height * jitter));
+             
+             return Math.max(2, barHeight);
+        })
+        .attr('fill', isActive ? '#22d3ee' : '#374151');
 
   }, [volume, isActive]);
 
   return (
-    <div className="w-full h-64 flex items-center justify-center relative overflow-hidden">
-        {/* Background Grid Effect */}
-        <div className="absolute inset-0 opacity-10" 
-             style={{
-                 backgroundImage: 'radial-gradient(circle, #333 1px, transparent 1px)', 
-                 backgroundSize: '20px 20px'
-             }}
-        />
-        
-        <svg ref={svgRef} className="w-full h-full z-10" />
-        
-        {/* Status Text */}
-        <div className="absolute bottom-4 text-xs tracking-[0.2em] text-cyan-500 uppercase font-mono">
-            {isActive ? `SYSTEM ONLINE // GAIN: ${(volume * 100).toFixed(0)}%` : 'SYSTEM STANDBY'}
-        </div>
+    <div ref={containerRef} className="w-full h-full">
+        <svg ref={svgRef} className="w-full h-full" />
     </div>
   );
 };

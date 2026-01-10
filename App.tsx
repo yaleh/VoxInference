@@ -5,7 +5,7 @@ import { GeminiLiveService } from './services/geminiLive';
 import PulseVisualizer from './components/PulseVisualizer';
 import TranscriptStream from './components/TranscriptStream';
 import SettingsModal from './components/SettingsModal';
-import { MicIcon, MicOffIcon, SettingsIcon, ActivityIcon } from './components/Icons';
+import { MicIcon, MicOffIcon, SettingsIcon, ActivityIcon, PauseIcon, PlayIcon } from './components/Icons';
 
 function App() {
   const [apiKey, setApiKey] = useState<string>('');
@@ -13,9 +13,14 @@ function App() {
   const [volume, setVolume] = useState<number>(0);
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   
-  // Refs for managing service without re-renders
+  // Stats
+  const [sessionDuration, setSessionDuration] = useState(0);
+  
+  // Refs
   const serviceRef = useRef<GeminiLiveService | null>(null);
+  const timerRef = useRef<number | null>(null);
 
   // Load API Key
   useEffect(() => {
@@ -35,29 +40,39 @@ function App() {
       localStorage.setItem(APP_CONFIG_KEY, JSON.stringify({ apiKey: key }));
   };
 
-  // Initialize Service Callback
+  // Timer Logic
+  useEffect(() => {
+    if (connectionState === ConnectionState.CONNECTED && !isPaused) {
+        timerRef.current = window.setInterval(() => {
+            setSessionDuration(prev => prev + 1);
+        }, 1000);
+    } else {
+        if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => {
+        if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [connectionState, isPaused]);
+
+  // Handle Transcript
   const handleTranscript = useCallback((text: string, sender: 'user' | 'model', isFinal: boolean) => {
     setTranscript(prev => {
         const newTranscript = [...prev];
         const lastIndex = newTranscript.length - 1;
         const lastItem = newTranscript[lastIndex];
 
-        // Logic: If same sender and partial, update existing item. Otherwise add new.
         if (lastItem && lastItem.sender === sender && lastItem.isPartial) {
-             const updatedItem = { ...lastItem }; // Create shallow copy to avoid mutation
-             
+             const updatedItem = { ...lastItem };
              if (isFinal) {
                  updatedItem.isPartial = false;
                  if (text) updatedItem.text += text; 
              } else {
                  updatedItem.text += text;
              }
-             
-             newTranscript[lastIndex] = updatedItem; // Replace with updated item
+             newTranscript[lastIndex] = updatedItem;
              return newTranscript;
         } else {
-            // New item
-            if (!text && isFinal) return prev; // Ignore empty completion signals if no prev item
+            if (!text && isFinal) return prev; 
             return [...prev, {
                 id: Date.now().toString(),
                 text: text,
@@ -73,6 +88,8 @@ function App() {
     if (connectionState === ConnectionState.CONNECTED || connectionState === ConnectionState.CONNECTING) {
       serviceRef.current?.disconnect();
       setVolume(0);
+      setSessionDuration(0);
+      setIsPaused(false);
       return;
     }
 
@@ -81,14 +98,13 @@ function App() {
       return;
     }
 
-    // Initialize Service
     serviceRef.current = new GeminiLiveService({
         onConnectionStateChange: (state) => setConnectionState(state as ConnectionState),
         onTranscript: handleTranscript,
         onAudioVolume: (vol) => setVolume(vol),
         onError: (err) => {
             console.error(err);
-            alert(`Error: ${err}`); // Simple alert for Phase 1
+            alert(`Error: ${err}`);
         }
     });
 
@@ -96,58 +112,96 @@ function App() {
 
   }, [apiKey, connectionState, handleTranscript]);
 
-  return (
-    <div className="flex flex-col h-screen w-full bg-black font-sans text-gray-100">
-      
-      {/* Header */}
-      <header className="h-14 border-b border-gray-800 flex items-center justify-between px-4 bg-gray-900/50 backdrop-blur-md sticky top-0 z-20">
-        <div className="flex items-center gap-2">
-            <ActivityIcon className="text-cyan-500 w-5 h-5" />
-            <h1 className="font-bold tracking-widest text-sm uppercase">The Pulse <span className="text-gray-600 text-xs ml-1">v0.1</span></h1>
-        </div>
-        <button onClick={() => setIsSettingsOpen(true)} className="p-2 text-gray-400 hover:text-white transition-colors">
-            <SettingsIcon className="w-5 h-5" />
-        </button>
-      </header>
+  const togglePause = useCallback(() => {
+      if (serviceRef.current && connectionState === ConnectionState.CONNECTED) {
+          const newState = !isPaused;
+          setIsPaused(newState);
+          serviceRef.current.setPaused(newState);
+      }
+  }, [connectionState, isPaused]);
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col relative overflow-hidden">
+  const formatTime = (seconds: number) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="flex flex-col h-screen w-full bg-black font-sans text-gray-100 overflow-hidden">
+      
+      {/* 1. Header & Metadata Dashboard */}
+      <header className="shrink-0 h-24 bg-gray-900/50 border-b border-gray-800 flex flex-col justify-between relative z-20">
+         {/* Stats Row */}
+        <div className="flex items-center justify-between px-6 pt-3 text-[10px] uppercase tracking-[0.2em] font-mono z-20 relative">
+            <div className="flex items-center gap-2">
+                <ActivityIcon className={`w-3 h-3 ${connectionState === ConnectionState.CONNECTED ? 'text-cyan-500' : 'text-gray-600'}`} />
+                <span className="text-gray-500">STATUS: <span className={connectionState === ConnectionState.CONNECTED ? 'text-cyan-400 font-bold' : 'text-gray-400'}>{isPaused ? 'PAUSED' : connectionState}</span></span>
+            </div>
+            <div className="text-gray-500">SESSION: <span className="text-gray-300">{formatTime(sessionDuration)}</span></div>
+        </div>
         
-        {/* Visualizer Area (The Brain) */}
-        <div className="shrink-0 border-b border-gray-800/50 bg-gradient-to-b from-gray-900 to-black relative">
-            <PulseVisualizer 
+        {/* Visualizer Area */}
+        <div className="absolute inset-0 pt-6 px-0 opacity-50 z-10">
+             <PulseVisualizer 
                 volume={volume} 
-                isActive={connectionState === ConnectionState.CONNECTED} 
+                isActive={connectionState === ConnectionState.CONNECTED && !isPaused} 
             />
         </div>
+      </header>
 
-        {/* Transcript Area (The Flow) */}
+      {/* 2. Main Content Area (Scrollable Stream) */}
+      <div className="flex-1 relative bg-black">
         <TranscriptStream items={transcript} />
+      </div>
 
-        {/* Floating Controls */}
-        <div className="absolute bottom-6 left-0 w-full flex justify-center z-30 pointer-events-none">
-             <div className="pointer-events-auto">
-                 <button
-                    onClick={toggleConnection}
-                    disabled={connectionState === ConnectionState.CONNECTING}
-                    className={`
-                        w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all duration-300
-                        ${connectionState === ConnectionState.CONNECTED 
-                            ? 'bg-red-500/90 hover:bg-red-600 text-white shadow-[0_0_30px_rgba(239,68,68,0.4)]' 
-                            : connectionState === ConnectionState.CONNECTING
-                                ? 'bg-gray-700 text-gray-400 animate-pulse cursor-wait'
-                                : 'bg-cyan-600/90 hover:bg-cyan-500 text-white shadow-[0_0_30px_rgba(6,182,212,0.4)] hover:scale-105'
-                        }
-                    `}
-                 >
-                    {connectionState === ConnectionState.CONNECTED ? (
-                        <MicOffIcon className="w-8 h-8" />
-                    ) : (
-                        <MicIcon className="w-8 h-8" />
-                    )}
-                 </button>
-             </div>
-        </div>
+      {/* 3. Bottom Control Dock */}
+      <div className="shrink-0 px-6 pb-8 pt-4 bg-gradient-to-t from-black via-black to-transparent z-30 flex items-center justify-between">
+          
+          {/* Settings / Secondary */}
+          <button 
+            onClick={() => setIsSettingsOpen(true)}
+            className="p-4 rounded-full bg-gray-900 hover:bg-gray-800 text-gray-400 transition-all border border-gray-800"
+          >
+              <SettingsIcon className="w-6 h-6" />
+          </button>
+
+          {/* Main Action (Mic) */}
+          <button
+            onClick={toggleConnection}
+            disabled={connectionState === ConnectionState.CONNECTING}
+            className={`
+                w-20 h-20 rounded-2xl flex items-center justify-center shadow-2xl transition-all duration-300 transform active:scale-95 border border-gray-800
+                ${connectionState === ConnectionState.CONNECTED 
+                    ? 'bg-red-900/20 hover:bg-red-900/40 text-red-500 border-red-900/50 shadow-[0_0_30px_rgba(239,68,68,0.1)]' 
+                    : connectionState === ConnectionState.CONNECTING
+                        ? 'bg-gray-800 text-gray-500 animate-pulse'
+                        : 'bg-cyan-900/20 hover:bg-cyan-900/40 text-cyan-500 border-cyan-900/50 shadow-[0_0_30px_rgba(6,182,212,0.1)]'
+                }
+            `}
+          >
+            {connectionState === ConnectionState.CONNECTED ? (
+                <div className="w-6 h-6 bg-current rounded-sm shadow-[0_0_10px_rgba(239,68,68,0.5)]" /> /* Stop Square with Glow */
+            ) : (
+                <MicIcon className="w-8 h-8" />
+            )}
+          </button>
+
+          {/* Pause / Resume */}
+          <button
+            onClick={togglePause}
+            disabled={connectionState !== ConnectionState.CONNECTED}
+            className={`
+                p-4 rounded-full border transition-all duration-300
+                ${connectionState === ConnectionState.CONNECTED
+                    ? isPaused 
+                        ? 'bg-yellow-900/20 border-yellow-700/50 text-yellow-500 hover:bg-yellow-900/30' 
+                        : 'bg-gray-900 border-gray-800 text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+                    : 'bg-gray-900 border-gray-800 text-gray-800 cursor-not-allowed'
+                }
+            `}
+          >
+              {isPaused ? <PlayIcon className="w-6 h-6" /> : <PauseIcon className="w-6 h-6" />}
+          </button>
       </div>
 
       <SettingsModal 

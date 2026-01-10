@@ -22,9 +22,17 @@ export class GeminiLiveService {
   private callbacks: LiveServiceCallbacks;
   private audioStream: MediaStream | null = null;
   private animationFrameId: number | null = null;
+  
+  // Pause state
+  public isPaused = false;
 
   constructor(callbacks: LiveServiceCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  setPaused(paused: boolean) {
+    this.isPaused = paused;
+    console.log(`Session ${paused ? 'Paused' : 'Resumed'}`);
   }
 
   async connect(apiKey: string) {
@@ -65,9 +73,12 @@ export class GeminiLiveService {
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
           responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+          },
           systemInstruction: INITIAL_SYSTEM_INSTRUCTION,
           inputAudioTranscription: {},
-          outputAudioTranscription: {},
+          outputAudioTranscription: {}, 
         },
         callbacks: {
           onopen: this.handleOpen.bind(this),
@@ -84,22 +95,30 @@ export class GeminiLiveService {
       // Set up Audio Processing Pipeline
       this.inputSource = this.inputAudioContext.createMediaStreamSource(this.audioStream);
       this.analyser = this.inputAudioContext.createAnalyser();
-      this.analyser.fftSize = 256; // fast reaction
+      this.analyser.fftSize = 256; 
       this.analyser.smoothingTimeConstant = 0.5;
 
       this.processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
 
       this.processor.onaudioprocess = (e) => {
         if (!this.isConnected) return;
+        
         const inputData = e.inputBuffer.getChannelData(0);
-        const pcmBlob = createPCM16Blob(inputData);
+        
+        // If paused, we send silence (zeros)
+        let dataToSend = inputData;
+        if (this.isPaused) {
+            dataToSend = new Float32Array(inputData.length); 
+        }
+
+        const pcmBlob = createPCM16Blob(dataToSend);
         sessionPromise.then((session) => {
             this.session = session;
             session.sendRealtimeInput({ media: pcmBlob });
         });
       };
 
-      // Connect graph: Source -> Analyser -> Processor -> Destination
+      // Connect graph
       this.inputSource.connect(this.analyser);
       this.analyser.connect(this.processor);
       this.processor.connect(this.inputAudioContext.destination);
@@ -121,9 +140,14 @@ export class GeminiLiveService {
       const loop = () => {
           if (!this.isConnected || !this.analyser) return;
           
+          if (this.isPaused) {
+              this.callbacks.onAudioVolume(0);
+              this.animationFrameId = requestAnimationFrame(loop);
+              return;
+          }
+
           this.analyser.getByteFrequencyData(dataArray);
           
-          // Calculate volume (average magnitude)
           let sum = 0;
           for (let i = 0; i < dataArray.length; i++) {
               sum += dataArray[i];
@@ -131,8 +155,6 @@ export class GeminiLiveService {
           const avg = sum / dataArray.length;
           const normalized = avg / 255;
           
-          // Only update volume if it's significant, or let output volume override in handleMessage?
-          // For now, we prefer input visualization when talking.
           this.callbacks.onAudioVolume(normalized);
           
           this.animationFrameId = requestAnimationFrame(loop);
@@ -143,6 +165,7 @@ export class GeminiLiveService {
   private handleOpen() {
     console.log("Gemini Live Session Opened");
     this.isConnected = true;
+    this.isPaused = false;
     this.callbacks.onConnectionStateChange('CONNECTED');
     this.nextStartTime = this.outputAudioContext?.currentTime || 0;
   }
@@ -156,21 +179,18 @@ export class GeminiLiveService {
       try {
         const audioBuffer = await decodeAudioData(base64Audio, this.outputAudioContext, SAMPLE_RATE_OUTPUT);
         
-        // Calculate model volume (simple approach for output)
         const data = audioBuffer.getChannelData(0);
         let sum = 0;
         for(let i=0; i<data.length; i+=50) sum += Math.abs(data[i]);
         const avg = sum / (data.length / 50);
-        // Boost model volume visibility
-        this.callbacks.onAudioVolume(Math.min(1, avg * 3));
+        
+        if (!this.isPaused) {
+            this.callbacks.onAudioVolume(Math.min(1, avg * 3));
+        }
 
-        const source = this.outputAudioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(this.outputAudioContext.destination);
+        // NOTE: Still muted physically as per 'CRITICAL PROTOCOLS' in constants.ts
+        // The visualizer reacts, but we do not play audio.
 
-        this.nextStartTime = Math.max(this.outputAudioContext.currentTime, this.nextStartTime);
-        source.start(this.nextStartTime);
-        this.nextStartTime += audioBuffer.duration;
       } catch (e) {
         console.error("Error decoding audio:", e);
       }
@@ -192,12 +212,6 @@ export class GeminiLiveService {
        this.callbacks.onTranscript("", 'model', true);
        this.callbacks.onTranscript("", 'user', true);
     }
-
-    // Handle Interruptions
-    if (message.serverContent?.interrupted) {
-      console.log("Model interrupted");
-      this.nextStartTime = this.outputAudioContext.currentTime;
-    }
   }
 
   private handleClose() {
@@ -207,6 +221,7 @@ export class GeminiLiveService {
 
   disconnect() {
     this.isConnected = false;
+    this.isPaused = false;
     this.callbacks.onConnectionStateChange('DISCONNECTED');
     
     if (this.animationFrameId) {

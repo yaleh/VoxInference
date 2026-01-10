@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { TranscriptItem } from '../types';
 
 interface TranscriptStreamProps {
@@ -6,51 +6,54 @@ interface TranscriptStreamProps {
 }
 
 const TranscriptStream: React.FC<TranscriptStreamProps> = ({ items }) => {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const userBottomRef = useRef<HTMLDivElement>(null);
+  const modelBottomRef = useRef<HTMLDivElement>(null);
+
+  // Separate and merge text to create a continuous stream effect
+  const userText = useMemo(() => items.filter(i => i.sender === 'user').map(i => i.text).join(' '), [items]);
+  const modelText = useMemo(() => items.filter(i => i.sender === 'model').map(i => i.text).join(' '), [items]);
+  
+  // Determine active state for cursors
+  const isUserActive = items.length > 0 && items[items.length - 1].sender === 'user' && items[items.length - 1].isPartial;
+  const isModelActive = items.length > 0 && items[items.length - 1].sender === 'model' && items[items.length - 1].isPartial;
 
   useEffect(() => {
-    // Auto-scroll to bottom on new items
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [items]);
+    if (userBottomRef.current) userBottomRef.current.scrollIntoView({ behavior: 'smooth' });
+  }, [userText]);
+
+  useEffect(() => {
+    if (modelBottomRef.current) modelBottomRef.current.scrollIntoView({ behavior: 'smooth' });
+  }, [modelText]);
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6 relative">
-       {/* Fade overlay at top */}
-       <div className="fixed top-[60px] left-0 w-full h-12 bg-gradient-to-b from-black to-transparent z-10 pointer-events-none" />
+    <div className="flex flex-col h-full bg-black font-mono text-sm md:text-base">
+      {/* User Section - Top Half */}
+      <div className="flex-1 border-b border-gray-800 p-6 overflow-hidden flex flex-col relative">
+         <div className="absolute top-2 left-6 text-[10px] uppercase tracking-[0.2em] text-gray-600 font-bold select-none z-10 bg-black px-1">
+            Incoming Stream
+         </div>
+         <div className="flex-1 overflow-y-auto custom-scrollbar pt-6">
+             <div className="text-gray-300 leading-relaxed whitespace-pre-wrap break-words">
+                {userText}
+                {isUserActive && <span className="inline-block w-2 h-4 ml-1 bg-gray-500 animate-pulse align-middle"/>}
+                <div ref={userBottomRef} />
+             </div>
+         </div>
+      </div>
 
-      {items.length === 0 && (
-        <div className="h-full flex flex-col items-center justify-center text-gray-700 space-y-4">
-            <p className="text-sm font-mono tracking-widest opacity-50">AWAITING INPUT STREAM...</p>
-        </div>
-      )}
-
-      {items.map((item) => (
-        <div
-          key={item.id}
-          className={`flex w-full ${
-            item.sender === 'user' ? 'justify-end' : 'justify-start'
-          }`}
-        >
-          <div
-            className={`max-w-[85%] p-3 rounded-lg backdrop-blur-sm border ${
-              item.sender === 'user'
-                ? 'bg-gray-800/50 border-gray-700 text-gray-200'
-                : 'bg-cyan-900/10 border-cyan-500/30 text-cyan-50 shadow-[0_0_15px_rgba(6,182,212,0.1)]'
-            }`}
-          >
-            <div className="text-[10px] uppercase tracking-widest mb-1 opacity-50 font-mono">
-                {item.sender === 'user' ? 'USER_AUDIO_IN' : 'THE_PULSE_RESPONSE'}
-            </div>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed font-light">
-                {item.text}
-                {item.isPartial && <span className="animate-pulse inline-block w-1.5 h-3 ml-1 bg-cyan-400 align-middle"/>}
-            </p>
-          </div>
-        </div>
-      ))}
-      <div ref={bottomRef} />
+      {/* Model Section - Bottom Half */}
+      <div className="flex-1 p-6 overflow-hidden flex flex-col relative bg-gray-900/10">
+         <div className="absolute top-2 left-6 text-[10px] uppercase tracking-[0.2em] text-cyan-700 font-bold select-none z-10 bg-black/50 px-1 backdrop-blur-sm">
+            System Response
+         </div>
+         <div className="flex-1 overflow-y-auto custom-scrollbar pt-6">
+             <div className="text-cyan-400 leading-relaxed whitespace-pre-wrap break-words">
+                {modelText}
+                {isModelActive && <span className="inline-block w-2 h-4 ml-1 bg-cyan-500 animate-pulse align-middle"/>}
+                <div ref={modelBottomRef} />
+             </div>
+         </div>
+      </div>
     </div>
   );
 };
