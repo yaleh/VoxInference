@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ConnectionState, TranscriptItem } from './types';
-import { APP_CONFIG_KEY } from './constants';
+import { APP_CONFIG_KEY, MODEL_NAME } from './constants';
 import { GeminiLiveService } from './services/geminiLive';
 import PulseVisualizer from './components/PulseVisualizer';
 import TranscriptStream from './components/TranscriptStream';
 import SettingsModal from './components/SettingsModal';
-import { MicIcon, MicOffIcon, SettingsIcon, ActivityIcon, PauseIcon, PlayIcon } from './components/Icons';
+import { MicIcon, MicOffIcon, SettingsIcon, ActivityIcon, PauseIcon, PlayIcon, TrashIcon } from './components/Icons';
 
 function App() {
   const [apiKey, setApiKey] = useState<string>('');
@@ -14,6 +14,7 @@ function App() {
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [pendingAutoConnect, setPendingAutoConnect] = useState(false);
   
   // Stats
   const [sessionDuration, setSessionDuration] = useState(0);
@@ -40,6 +41,14 @@ function App() {
       localStorage.setItem(APP_CONFIG_KEY, JSON.stringify({ apiKey: key }));
   };
 
+  // Immediate start when key is added and pending flag is set
+  useEffect(() => {
+    if (apiKey && pendingAutoConnect && connectionState === ConnectionState.DISCONNECTED) {
+        setPendingAutoConnect(false);
+        toggleConnection();
+    }
+  }, [apiKey, pendingAutoConnect, connectionState]);
+
   // Timer Logic
   useEffect(() => {
     if (connectionState === ConnectionState.CONNECTED && !isPaused) {
@@ -53,6 +62,15 @@ function App() {
         if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [connectionState, isPaused]);
+
+  // Derived Stats
+  const stats = useMemo(() => {
+      return transcript.reduce((acc, item) => {
+          if (item.sender === 'user') acc.userChars += item.text.length;
+          else acc.modelChars += item.text.length;
+          return acc;
+      }, { userChars: 0, modelChars: 0 });
+  }, [transcript]);
 
   // Handle Transcript
   const handleTranscript = useCallback((text: string, sender: 'user' | 'model', isFinal: boolean) => {
@@ -88,12 +106,13 @@ function App() {
     if (connectionState === ConnectionState.CONNECTED || connectionState === ConnectionState.CONNECTING) {
       serviceRef.current?.disconnect();
       setVolume(0);
-      setSessionDuration(0);
       setIsPaused(false);
+      // Note: We do NOT reset sessionDuration here, allowing stats to persist
       return;
     }
 
     if (!apiKey) {
+      setPendingAutoConnect(true);
       setIsSettingsOpen(true);
       return;
     }
@@ -120,6 +139,12 @@ function App() {
       }
   }, [connectionState, isPaused]);
 
+  const clearSession = useCallback(() => {
+      setTranscript([]);
+      setSessionDuration(0);
+      // Optional: if currently connected, could maybe briefly pause visualizers or just let them run
+  }, []);
+
   const formatTime = (seconds: number) => {
       const mins = Math.floor(seconds / 60);
       const secs = seconds % 60;
@@ -130,18 +155,41 @@ function App() {
     <div className="flex flex-col h-screen w-full bg-black font-sans text-gray-100 overflow-hidden">
       
       {/* 1. Header & Metadata Dashboard */}
-      <header className="shrink-0 h-24 bg-gray-900/50 border-b border-gray-800 flex flex-col justify-between relative z-20">
-         {/* Stats Row */}
-        <div className="flex items-center justify-between px-6 pt-3 text-[10px] uppercase tracking-[0.2em] font-mono z-20 relative">
+      <header className="shrink-0 h-32 bg-gray-900/50 border-b border-gray-800 flex flex-col relative z-20 overflow-hidden">
+        
+        {/* Top Status Bar */}
+        <div className="flex items-center justify-between px-6 pt-4 text-[10px] uppercase tracking-[0.2em] font-mono z-20 relative text-gray-400">
             <div className="flex items-center gap-2">
                 <ActivityIcon className={`w-3 h-3 ${connectionState === ConnectionState.CONNECTED ? 'text-cyan-500' : 'text-gray-600'}`} />
-                <span className="text-gray-500">STATUS: <span className={connectionState === ConnectionState.CONNECTED ? 'text-cyan-400 font-bold' : 'text-gray-400'}>{isPaused ? 'PAUSED' : connectionState}</span></span>
+                <span>
+                    STATUS: <span className={connectionState === ConnectionState.CONNECTED ? 'text-cyan-400 font-bold' : 'text-gray-400'}>
+                        {isPaused ? 'PAUSED' : connectionState}
+                    </span>
+                </span>
             </div>
-            <div className="text-gray-500">SESSION: <span className="text-gray-300">{formatTime(sessionDuration)}</span></div>
+            <div className="opacity-60 truncate max-w-[150px] md:max-w-none">
+                MODEL: {MODEL_NAME.split('-')[1].toUpperCase()}
+            </div>
+        </div>
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-3 gap-4 px-6 mt-4 mb-2 z-20 relative font-mono text-xs">
+            <div className="flex flex-col">
+                <span className="text-[9px] uppercase tracking-wider text-gray-600 mb-1">Duration</span>
+                <span className="text-xl text-gray-200">{formatTime(sessionDuration)}</span>
+            </div>
+            <div className="flex flex-col border-l border-gray-800 pl-4">
+                <span className="text-[9px] uppercase tracking-wider text-gray-600 mb-1">Input Chars</span>
+                <span className="text-xl text-gray-300">{stats.userChars}</span>
+            </div>
+            <div className="flex flex-col border-l border-gray-800 pl-4">
+                <span className="text-[9px] uppercase tracking-wider text-gray-600 mb-1">Output Chars</span>
+                <span className="text-xl text-cyan-400">{stats.modelChars}</span>
+            </div>
         </div>
         
-        {/* Visualizer Area */}
-        <div className="absolute inset-0 pt-6 px-0 opacity-50 z-10">
+        {/* Visualizer Background */}
+        <div className="absolute inset-0 top-auto h-12 opacity-30 z-10 pointer-events-none">
              <PulseVisualizer 
                 volume={volume} 
                 isActive={connectionState === ConnectionState.CONNECTED && !isPaused} 
@@ -157,13 +205,25 @@ function App() {
       {/* 3. Bottom Control Dock */}
       <div className="shrink-0 px-6 pb-8 pt-4 bg-gradient-to-t from-black via-black to-transparent z-30 flex items-center justify-between">
           
-          {/* Settings / Secondary */}
-          <button 
-            onClick={() => setIsSettingsOpen(true)}
-            className="p-4 rounded-full bg-gray-900 hover:bg-gray-800 text-gray-400 transition-all border border-gray-800"
-          >
-              <SettingsIcon className="w-6 h-6" />
-          </button>
+          <div className="flex gap-4">
+            {/* Settings */}
+            <button 
+                onClick={() => setIsSettingsOpen(true)}
+                className="p-4 rounded-full bg-gray-900 hover:bg-gray-800 text-gray-400 transition-all border border-gray-800"
+                title="Settings"
+            >
+                <SettingsIcon className="w-5 h-5" />
+            </button>
+
+            {/* Clear Session */}
+            <button 
+                onClick={clearSession}
+                className="p-4 rounded-full bg-gray-900 hover:bg-red-900/20 text-gray-400 hover:text-red-400 transition-all border border-gray-800"
+                title="Clear Session"
+            >
+                <TrashIcon className="w-5 h-5" />
+            </button>
+          </div>
 
           {/* Main Action (Mic) */}
           <button

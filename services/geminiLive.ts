@@ -1,6 +1,6 @@
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { createPCM16Blob, decodeAudioData } from './audioUtils';
-import { SAMPLE_RATE_INPUT, SAMPLE_RATE_OUTPUT, INITIAL_SYSTEM_INSTRUCTION } from '../constants';
+import { SAMPLE_RATE_INPUT, SAMPLE_RATE_OUTPUT, INITIAL_SYSTEM_INSTRUCTION, MODEL_NAME } from '../constants';
 
 interface LiveServiceCallbacks {
   onConnectionStateChange: (state: string) => void;
@@ -70,7 +70,7 @@ export class GeminiLiveService {
 
       // Connect to Gemini Live
       const sessionPromise = this.ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+        model: MODEL_NAME,
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {

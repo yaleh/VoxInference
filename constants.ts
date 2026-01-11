@@ -1,6 +1,7 @@
 export const APP_CONFIG_KEY = 'the_pulse_config_v1';
 export const SAMPLE_RATE_INPUT = 16000;
 export const SAMPLE_RATE_OUTPUT = 24000;
+export const MODEL_NAME = 'gemini-2.5-flash-native-audio-preview-12-2025';
 
 export const INITIAL_SYSTEM_INSTRUCTION = `
 You are "The Pulse", a silent, real-time cognitive co-processor.
